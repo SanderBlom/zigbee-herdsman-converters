@@ -2854,8 +2854,9 @@ export const definitions: DefinitionWithExtend[] = [
         model: "4512750",
         vendor: "Namron",
         description: "Zigbee dimmer 2.0",
+        version: "0.0.1",
         ota: true,
-        extend: [m.light({configureReporting: true})],
+        extend: [m.light({configureReporting: true}), namron.dimmerBallast()],
         whiteLabel: [{vendor: "Namron", model: "4512751", description: "Zigbee dimmer 2.0", fingerprint: [{modelID: "4512751"}]}],
     },
     {

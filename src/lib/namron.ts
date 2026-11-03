@@ -2,7 +2,7 @@ import {Zcl} from "zigbee-herdsman";
 
 import * as utils from "../lib/utils";
 import * as modernExtend from "./modernExtend";
-import type {Fz, KeyValue, KeyValueAny, Tz} from "./types";
+import type {Fz, KeyValue, KeyValueAny, ModernExtend, Tz} from "./types";
 
 export interface NamronHvacThermostat {
     attributes: {
@@ -81,6 +81,76 @@ export interface NamronHvacThermostat2 {
 }
 
 const sunricherManufacturer = {manufacturerCode: Zcl.ManufacturerCode.SHENZHEN_SUNRICHER_TECHNOLOGY_LTD};
+
+/** Ballast settings tested on 4512750/4512751 firmware 3.12 (OTA version 32), absent on older 3.09 devices. */
+export function dimmerBallast(): ModernExtend {
+    const cluster = "lightingBallastCfg";
+    const settings = [
+        {name: "ballast_minimum_level", attribute: "minLevel", description: "Specifies the minimum light output of the ballast"},
+        {name: "ballast_maximum_level", attribute: "maxLevel", description: "Specifies the maximum light output of the ballast"},
+        {name: "ballast_power_on_level", attribute: "powerOnLevel", description: "Specifies the initialisation light level of the ballast"},
+    ] as const;
+    const extensions = settings.map(({name, attribute, description}) =>
+        modernExtend.numeric({
+            name,
+            cluster,
+            attribute,
+            description,
+            valueMin: 1,
+            valueMax: 254,
+            valueStep: 1,
+            entityCategory: "config",
+            // Without default responses, writes time out and the tested firmware does not apply them.
+            zigbeeCommandOptions: {disableDefaultResponse: false},
+        }),
+    );
+    const toZigbee = extensions
+        .flatMap((extension) => extension.toZigbee ?? [])
+        .map(
+            (converter): Tz.Converter => ({
+                ...converter,
+                convertSet: async (entity, key, value, meta) => {
+                    utils.assertEndpoint(entity);
+                    if (!entity.supportsInputCluster(cluster)) throw new Error("Ballast configuration is not supported by this dimmer firmware");
+                    utils.assertNumber(value, key);
+                    if (!Number.isInteger(value) || value < 1 || value > 254) throw new Error(`${key} must be an integer between 1 and 254`);
+                    return await converter.convertSet(entity, key, value, meta);
+                },
+                convertGet: async (entity, key, meta) => {
+                    utils.assertEndpoint(entity);
+                    if (!entity.supportsInputCluster(cluster)) throw new Error("Ballast configuration is not supported by this dimmer firmware");
+                    await converter.convertGet(entity, key, meta);
+                },
+            }),
+        );
+
+    return {
+        isModernExtend: true,
+        exposes: [
+            (device, options) => {
+                // Check the advertised capability, not a version cutoff inferred from only two firmware versions.
+                if (!utils.isDummyDevice(device) && !device.getEndpoint(1)?.supportsInputCluster(cluster)) return [];
+                return extensions.flatMap((extension) =>
+                    (extension.exposes ?? []).flatMap((expose) => (typeof expose === "function" ? expose(device, options) : [expose])),
+                );
+            },
+        ],
+        fromZigbee: extensions.flatMap((extension) => extension.fromZigbee ?? []),
+        toZigbee,
+        configure: [
+            async (device) => {
+                const endpoint = device.getEndpoint(1);
+                if (endpoint?.supportsInputCluster(cluster)) {
+                    await endpoint.read(
+                        cluster,
+                        settings.map((setting) => setting.attribute),
+                        {disableDefaultResponse: false},
+                    );
+                }
+            },
+        ],
+    };
+}
 
 function toDate(value: number): string {
     if (value === undefined) {
